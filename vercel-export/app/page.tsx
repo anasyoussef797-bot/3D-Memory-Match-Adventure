@@ -358,41 +358,106 @@ export default function HomeApp() {
   const isRtl = lang === "ar";
   const t = lang ? TRANSLATIONS[lang] : TRANSLATIONS["en"];
 
-  // Fallback Speach synthesizer
+  // Fallback Speech synthesizer with premium native voice-matching
   const playSpeechSynthesis = (text: string, voiceLang: LanguageCode) => {
     if (isMuted || !("speechSynthesis" in window)) {
       setIsAudioLoading(false);
       return;
     }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    if (voiceLang === "ar") utterance.lang = "ar-EG";
-    else if (voiceLang === "fr") utterance.lang = "fr-FR";
-    else if (voiceLang === "de") utterance.lang = "de-DE";
-    else utterance.lang = "en-US";
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+      
+      // Select exact standard locale
+      if (voiceLang === "ar") {
+        utterance.lang = "ar-EG";
+      } else if (voiceLang === "fr") {
+        utterance.lang = "fr-FR";
+      } else if (voiceLang === "de") {
+        utterance.lang = "de-DE";
+      } else {
+        utterance.lang = "en-US";
+      }
 
-    utterance.onend = () => setIsAudioLoading(false);
-    utterance.onerror = () => setIsAudioLoading(false);
-    window.speechSynthesis.speak(utterance);
+      // Find best available native browser voice matching the requested locale
+      const voices = window.speechSynthesis.getVoices();
+      const matchedVoice = voices.find((v) => {
+        const nameLower = v.name.toLowerCase();
+        const langLower = v.lang.toLowerCase();
+        if (voiceLang === "ar") {
+          return langLower.startsWith("ar") || nameLower.includes("arabic") || nameLower.includes("maged") || nameLower.includes("tarik") || nameLower.includes("leila");
+        }
+        return langLower.startsWith(voiceLang);
+      });
+
+      if (matchedVoice) {
+        utterance.voice = matchedVoice;
+      }
+
+      utterance.onend = () => setIsAudioLoading(false);
+      utterance.onerror = () => setIsAudioLoading(false);
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.error("SpeechSynthesis error:", err);
+      setIsAudioLoading(false);
+    }
   };
 
+  // Ultra-robust dual-layer playTts with HTML5 Audio error tracking and timeouts
   const playTts = async (text: string, voiceLang: LanguageCode) => {
     if (isMuted) return;
+
+    // Halt any currently active audio
     if (currentAudioRef.current) {
-      currentAudioRef.current.pause();
+      try {
+        currentAudioRef.current.pause();
+      } catch (e) {}
+      currentAudioRef.current = null;
     }
+
     setIsAudioLoading(true);
 
     try {
       const serverUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${voiceLang}`;
-      const audio = new Audio(serverUrl);
+      const audio = new Audio();
+      
+      let fallbackTriggered = false;
+      const triggerFallback = () => {
+        if (!fallbackTriggered) {
+          fallbackTriggered = true;
+          console.warn(`[TTS Proxy failed or timed out for text: "${text}"]. Falling back to browser native voice engine.`);
+          playSpeechSynthesis(text, voiceLang);
+        }
+      };
+
+      // Handle async loading or format errors
+      audio.onerror = () => {
+        triggerFallback();
+      };
+
+      // Prevent infinite waiting if server doesn't respond or hangs
+      const timeoutId = setTimeout(() => {
+        if (!fallbackTriggered) {
+          triggerFallback();
+        }
+      }, 3000);
+
       currentAudioRef.current = audio;
-      audio.play().then(() => {
-        setIsAudioLoading(false);
-      }).catch(() => {
-        playSpeechSynthesis(text, voiceLang);
-      });
-    } catch {
+      audio.src = serverUrl;
+
+      audio.play()
+        .then(() => {
+          clearTimeout(timeoutId);
+          setIsAudioLoading(false);
+        })
+        .catch((err) => {
+          clearTimeout(timeoutId);
+          console.warn("Audio play promise rejected, using fallback speech synthesis.", err);
+          triggerFallback();
+        });
+
+    } catch (err) {
+      console.error("Audio initialization exception, falling back to speech synthesis.", err);
       playSpeechSynthesis(text, voiceLang);
     }
   };
