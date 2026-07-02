@@ -267,49 +267,61 @@ export default function App() {
 
     setIsAudioLoading(true);
 
-    try {
-      const serverUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${voiceLang}`;
-      const audio = new Audio();
-      
-      let fallbackTriggered = false;
-      const triggerFallback = () => {
+    const directUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${voiceLang}&client=tw-ob&q=${encodeURIComponent(text)}`;
+    const proxyUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${voiceLang}`;
+
+    let fallbackTriggered = false;
+
+    // Triple-layer safety net: Direct Google TTS -> Proxy API -> Web SpeechSynthesis
+    const tryPlay = (urlsToTry: string[]) => {
+      if (urlsToTry.length === 0) {
         if (!fallbackTriggered) {
           fallbackTriggered = true;
-          console.warn(`[TTS Proxy failed or timed out for text: "${text}"]. Falling back to browser native voice engine.`);
+          console.warn(`[All Audio URLs failed or timed out for text: "${text}"]. Falling back to browser native SpeechSynthesis.`);
           playSpeechSynthesisFallback(text, voiceLang);
         }
-      };
+        return;
+      }
 
-      // Handle async loading or format errors
-      audio.onerror = () => {
-        triggerFallback();
-      };
-
-      // Prevent infinite waiting if server doesn't respond or hangs
-      const timeoutId = setTimeout(() => {
-        if (!fallbackTriggered) {
-          triggerFallback();
-        }
-      }, 3000);
-
+      const currentUrl = urlsToTry[0];
+      const audio = new Audio();
       currentAudioRef.current = audio;
-      audio.src = serverUrl;
 
+      let isCurrentAttemptDone = false;
+      let timeoutId: any = null;
+
+      const handleFailure = (reason: string) => {
+        if (isCurrentAttemptDone) return;
+        isCurrentAttemptDone = true;
+        if (timeoutId) clearTimeout(timeoutId);
+        console.warn(`TTS attempt failed for URL: ${currentUrl}. Reason: ${reason}`);
+        // Try next URL
+        tryPlay(urlsToTry.slice(1));
+      };
+
+      audio.onerror = () => {
+        handleFailure("audio.onerror triggered");
+      };
+
+      timeoutId = setTimeout(() => {
+        handleFailure("timeout reached");
+      }, 2500);
+
+      audio.src = currentUrl;
       audio.play()
         .then(() => {
-          clearTimeout(timeoutId);
-          setIsAudioLoading(false);
+          if (!isCurrentAttemptDone) {
+            isCurrentAttemptDone = true;
+            if (timeoutId) clearTimeout(timeoutId);
+            setIsAudioLoading(false);
+          }
         })
         .catch((err) => {
-          clearTimeout(timeoutId);
-          console.warn("Audio play promise rejected, using fallback speech synthesis.", err);
-          triggerFallback();
+          handleFailure(err?.message || "play promise rejected");
         });
+    };
 
-    } catch (err) {
-      console.error("Audio initialization exception, falling back to speech synthesis.", err);
-      playSpeechSynthesisFallback(text, voiceLang);
-    }
+    tryPlay([directUrl, proxyUrl]);
   };
 
   // Launch celebratory star bursts
