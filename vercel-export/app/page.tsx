@@ -358,6 +358,28 @@ export default function HomeApp() {
   const isRtl = lang === "ar";
   const t = lang ? TRANSLATIONS[lang] : TRANSLATIONS["en"];
 
+  // Warm up voices on mount and cleanup audio on unmount
+  useEffect(() => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.getVoices();
+      const handleVoices = () => {
+        window.speechSynthesis.getVoices();
+      };
+      window.speechSynthesis.addEventListener("voiceschanged", handleVoices);
+      return () => {
+        window.speechSynthesis.removeEventListener("voiceschanged", handleVoices);
+      };
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+      }
+    };
+  }, []);
+
   // Fallback Speech synthesizer with premium native voice-matching
   const playSpeechSynthesis = (text: string, voiceLang: LanguageCode) => {
     if (isMuted || !("speechSynthesis" in window)) {
@@ -435,6 +457,7 @@ export default function HomeApp() {
 
       const currentUrl = urlsToTry[0];
       const audio = new Audio();
+      (audio as any).referrerPolicy = "no-referrer";
       currentAudioRef.current = audio;
 
       let isCurrentAttemptDone = false;

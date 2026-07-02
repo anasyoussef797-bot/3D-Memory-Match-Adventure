@@ -198,6 +198,19 @@ export default function App() {
 
   // Clean up speech or audio on unmount
   useEffect(() => {
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.getVoices();
+      const handleVoices = () => {
+        window.speechSynthesis.getVoices();
+      };
+      window.speechSynthesis.addEventListener("voiceschanged", handleVoices);
+      return () => {
+        window.speechSynthesis.removeEventListener("voiceschanged", handleVoices);
+      };
+    }
+  }, []);
+
+  useEffect(() => {
     return () => {
       if (currentAudioRef.current) {
         currentAudioRef.current.pause();
@@ -285,6 +298,7 @@ export default function App() {
 
       const currentUrl = urlsToTry[0];
       const audio = new Audio();
+      (audio as any).referrerPolicy = "no-referrer";
       currentAudioRef.current = audio;
 
       let isCurrentAttemptDone = false;
